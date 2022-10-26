@@ -4,54 +4,134 @@ on:
   push:
     tags:
     - "*"
+  workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: ubuntu-20.04
+  # build:
+  #   runs-on: ubuntu-20.04
+  #   strategy:
+  #     matrix:
+  #       target: [i686, x86_64, arm, armhf, aarch64, mips, mipsel, mips64, mips64el, s390x]
+  #   steps:
+  #     - uses: actions/checkout@v3
+  #     - name: Install packages
+  #       run: |
+  #         sudo apt-get update
+  #         sudo apt-get install -y autoconf automake build-essential cmake curl file libtool
+  #     - name: Cross build (${{ matrix.target }})
+  #       env:
+  #         BUILD_TARGET: ${{ matrix.target }}
+  #       run: |
+  #         ./scripts/cross-build.sh
+  #         mv build/ttyd build/ttyd.${{ matrix.target }}
+  #     - uses: ncipollo/release-action@v1
+  #       if: github.event_name == 'push'
+  #       with:
+  #         artifacts: build/ttyd.${{ matrix.target }}
+  #         allowUpdates: true
+  #         draft: true
+  # win10:
+  #   runs-on: windows-latest
+  #   steps:
+  #     - uses: actions/checkout@v3
+  #     - uses: msys2/setup-msys2@v2
+  #       with:
+  #         msystem: MINGW64
+  #         install: >-
+  #           base-devel
+  #           subversion
+  #           mingw64/mingw-w64-x86_64-gcc
+  #           mingw64/mingw-w64-x86_64-cmake
+  #           mingw64/mingw-w64-x86_64-zlib
+  #           mingw64/mingw-w64-x86_64-libuv
+  #           mingw64/mingw-w64-x86_64-mbedtls
+  #           mingw64/mingw-w64-x86_64-json-c
+  #         update: true
+  #     - name: Build ttyd
+  #       shell: msys2 {0}
+  #       run: |
+  #         ./scripts/mingw-build.sh
+  #         mv build/ttyd.exe build/ttyd.win10.exe
+  #     - uses: ncipollo/release-action@v1
+  #       if: github.event_name == 'push'
+  #       with:
+  #         artifacts: build/ttyd.win10.exe
+  #         allowUpdates: true
+  #         draft: true
+  macos:
+    runs-on: macos-latest
     strategy:
       matrix:
-        target: [i686, x86_64, arm, armhf, aarch64, mips, mipsel, mips64, mips64el, s390x]
+        target: [x86_64, arm64 ]
     steps:
       - uses: actions/checkout@v3
-      - name: Install packages
+      - name: Install brew packages - x86_64
+        if: ${{ matrix.target == 'x86_64' }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y autoconf automake build-essential cmake curl file libtool
-      - name: Cross build (${{ matrix.target }})
-        env:
-          BUILD_TARGET: ${{ matrix.target }}
+          brew update --quiet
+          brew install cmake json-c libevent libuv libwebsockets openssl@1.1
+      - name: Install brew packages - arm64
+        if: ${{ matrix.target == 'arm64' }}
         run: |
-          ./scripts/cross-build.sh
-          mv build/ttyd build/ttyd.${{ matrix.target }}
+          bottle_tag="arm64_big_sur" # change to "arm64_monterey" when `macos-latest` switches to monterey
+          brew fetch --force --bottle-tag=$bottle_tag libwebsockets libevent json-c libuv openssl@1.1
+          for p in libwebsockets libevent json-c libuv openssl@1.1; do
+            P_PREFIX="$(brew --prefix $p)"
+            brew uninstall --ignore-dependencies --force $p && rm -rf $P_PREFIX
+            brew install -f "$(brew --cache)"/**/*$p*${bottle_tag}*.tar.gz
+            # P_PREFIX="$(brew --prefix $p)"
+            # cd "$(mktemp -d)"
+            # tar xf "$(brew --cache)"/**/*$p*${bottle_tag}*.tar.gz
+            # case "$p" in
+            #   openssl@1.1)
+            #     lipo $p/*/lib/libssl.a "${P_PREFIX}/lib/libssl.a" -create -output libssl.a
+            #     ;;
+            #   libuv|libevent|libwebsockets)
+            #     lipo $p/*/lib/$p.a "${P_PREFIX}/lib/$p.a" -create -output $p.a
+            #     ;;
+            #   json-c)
+            #     lipo $p/*/lib/lib$p.a "${P_PREFIX}/lib/lib$p.a" -create -output lib$p.a
+            #     ;;
+            #   *)
+            #     ;;
+            # esac
+            # mv -f *.a ${P_PREFIX}/lib/
+            # We're about to mangle packages, so let's remove any potentially broken
+            # installs (e.g. curl, git) as those could interfere with our build.
+            # brew uninstall $(brew uses --installed --recursive $p)
+            # brew unlink $p
+            # ln -sf "$(brew --prefix)/opt/$(readlink "${P_PREFIX}")/bin"/* /usr/local/bin/
+            # ln -sf "$(brew --prefix)/opt/$(readlink "${P_PREFIX}")/include"/* /usr/local/include/
+            # rm -f "$P_PREFIX"
+          done
+      - name: Build - arm64
+        if: ${{ matrix.target == 'arm64' }}
+        run: |
+          export MACOSX_DEPLOYMENT_TARGET="$(sw_vers -productVersion | cut -f1 -d.)"
+          OSX_FLAGS="-DCMAKE_OSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET} -DCMAKE_OSX_ARCHITECTURES=arm64"
+          rm -rf build
+          cmake -S . -B build \
+            $OSX_FLAGS \
+            -DOPENSSL_ROOT_DIR=$(brew --prefix)/opt/openssl@1.1/ \
+            -Dlibwebsockets_DIR=$(brew --prefix)/lib/cmake/libwebsockets
+          cmake --build build
+          cp build/ttyd ../ttyd.arm64
+          # Make sure we build for arm64
+          # lipo -info "build/ttyd" | grep -q arm64 || exit 1
+      - name: Build - x86_64
+        if: ${{ matrix.target == 'x86_64' }}
+        run: |
+          rm -rf build
+          cmake -S . -B build \
+            -DOPENSSL_ROOT_DIR=$(brew --prefix)/opt/openssl@1.1/ \
+            -Dlibwebsockets_DIR=$(brew --prefix)/lib/cmake/libwebsockets
+          cmake --build build
+          cp build/ttyd ../ttyd.x86_64
+          # Make sure we build for arm64
+          # lipo -info "build/ttyd" | grep -q arm64 || exit 1
       - uses: ncipollo/release-action@v1
+        if: github.event_name == 'push'
         with:
-          artifacts: build/ttyd.${{ matrix.target }}
-          allowUpdates: true
-          draft: true
-  win10:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          install: >-
-            base-devel
-            subversion
-            mingw64/mingw-w64-x86_64-gcc
-            mingw64/mingw-w64-x86_64-cmake
-            mingw64/mingw-w64-x86_64-zlib
-            mingw64/mingw-w64-x86_64-libuv
-            mingw64/mingw-w64-x86_64-mbedtls
-            mingw64/mingw-w64-x86_64-json-c
-          update: true
-      - name: Build ttyd
-        shell: msys2 {0}
-        run: |
-          ./scripts/mingw-build.sh
-          mv build/ttyd.exe build/ttyd.win10.exe
-      - uses: ncipollo/release-action@v1
-        with:
-          artifacts: build/ttyd.win10.exe
+          artifacts: build/ttyd.darwin
           allowUpdates: true
           draft: true

@@ -1,5 +1,14 @@
 cmake_minimum_required(VERSION 2.8)
 
+if(APPLE)
+	# execute_process(
+    #     COMMAND sw_vers -productVersion | cut -f1 -d.
+    #     VARIABLE MACOSX_DEPLOYMENT_TARGET
+    # )
+    # set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "" FORCE)
+    # set(CMAKE_OSX_DEPLOYMENT_TARGET ${MACOSX_DEPLOYMENT_TARGET} CACHE STRING "" FORCE)
+endif()
+
 if(${CMAKE_VERSION} VERSION_LESS "3.12.0")
     project(ttyd C) 
     set(PROJECT_VERSION_MAJOR "1")
